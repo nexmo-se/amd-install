@@ -14,13 +14,15 @@ AWS_KEY=""
 AWS_SECRET=""
 S3_BUCKET_NAME= ""
 DB_TABLE=""
+LOG_GROUP_NAME=""
+INSTANCE_NAME=""
+
 REGION="us-east-1"
 
 #this do not need to changed
 ENV="prod"
 PORT="80:8080"
 DOCKER_FILE="tbass134/amd"
-LOG_GROUP_NAME="amdLogGroup"
 MODEL="https://vonage-amd.s3.amazonaws.com/models/export.pkl"
 
 import os
@@ -147,7 +149,13 @@ def update_table(table_name,region, bucket_name, model_path):
 	print(json.dumps(response))
 
 
-def setup():
+def initialize_aws_settings():
+	"""
+	Creates a S3 bucket,
+	Upload the ML model to the newly created S3 bucket
+	Creates a dynamodb Table and populates the table accordingly
+	"""
+
 	#create the bucket
 	create_bucket(S3_BUCKET_NAME,REGION)
 	time.sleep(1)
@@ -167,25 +175,57 @@ def setup():
 	else:
 		print("Error: could not find downloaded model")
 
-print("Beging running setup....")
-setup()
+def create_ec2_instance():
+	print("Creating EC2 instance..")
+	os.system("docker-machine create --driver amazonec2 --amazonec2-open-port 8000 --amazonec2-region {} {}".format(REGION, INSTANCE_NAME))
+	print("Connectting to instance...")
+	print("activate instance")
 
-print("Creating EC2 instance..")
-os.system("docker-machine create --driver amazonec2 --amazonec2-open-port 8000 --amazonec2-region {} {}".format(REGION, INSTANCE_NAME))
-print("Connectting to instance...")
-print("activate instance")
+	print("="*120)
 
-print("="*60)
+	print("Docker instance is running, however you will have to run the following commands manually")
+	print("1:	run `docker-machine env {}`".format(INSTANCE_NAME))
+	print("2:	then: `eval $(docker-machine env {})` ".format(INSTANCE_NAME))
+	print("3:	ssh into the instance with this command `docker-machine ssh {}`".format(INSTANCE_NAME))
+	print("You will then be connected into the instance")
+	print("The dockerfile is private, therefore you will need to login to docker. Please ask to be added to the docker file")
+	print("You will also need to setup CloudWatch logs before running the final command. Please see https://docs.google.com/document/d/1hi6fPdICSsSh1__L-9I1uXgdOfRSsTxwYp9GKH04bBQ/edit#heading=h.gc1u9cvgpw0a for more info")
 
-print("Docker instance is running, however you will have to run the following commands manually")
-print("1:	run `docker-machine env {}`".format(INSTANCE_NAME))
-print("2:	then: `eval $(docker-machine env {}`) ".format(INSTANCE_NAME))
-print("3:	ssh into the instance with this command `docker-machine ssh {}`".format(INSTANCE_NAME))
-print("You will then be connected into the instance")
-print("The dockerfile is private, therefore you will need to login to docker. Please ask to be added to the docker file")
-print("You will also need to setup CloudWatch logs before running the final command. Please see https://docs.google.com/document/d/1hi6fPdICSsSh1__L-9I1uXgdOfRSsTxwYp9GKH04bBQ/edit#heading=h.gc1u9cvgpw0a for more info")
+	docker_command = "sudo docker run -d --log-driver=awslogs --log-opt awslogs-region={} --log-opt awslogs-group={} --log-opt awslogs-create-group=true -e AWS_KEY={} -e AWS_SECRET={} -e DB_TABLE={} -e DB_REGION={} -e ENV={} -p {} {}".format(REGION, LOG_GROUP_NAME, AWS_KEY, AWS_SECRET, DB_TABLE, REGION, ENV, PORT, DOCKER_FILE)
 
-docker_command = "sudo docker run -d --log-driver=awslogs --log-opt awslogs-region={} --log-opt awslogs-group={} -e AWS_KEY={} -e AWS_SECRET={} -e DB_TABLE={} -e DB_REGION={} -e ENV={} -p {} {}".format(REGION, LOG_GROUP_NAME, AWS_KEY, AWS_SECRET, DB_TABLE, REGION, ENV, PORT, DOCKER_FILE)
+	print("4:	run this command `{}`".format(docker_command))
+	print("="*120)
+	sys.exit()
 
-print("4:	run this command `{}``".format(docker_command))
-print("="*60)
+def main():
+	print("="*120)
+	print("To get started, run the first command `initialize_aws_settings`. This will provision a S3 bucket as well as a DyanomDB Table. When this is completed, run `create_ec2_instance` to build the EC2 instance")
+	print("="*120)
+
+	switcher = {
+		  1: initialize_aws_settings,
+		  2: create_ec2_instance
+		  }
+	while(True):
+		s_choice = input('''
+		1: Initalize AWS Settings
+		2: Create EC2 Instance
+		Enter Choice:''')
+
+		i_choice = 0
+		try:
+			i_choice = float(s_choice)
+		except ValueError:
+			print ("Invalid Choice!!\n")
+			continue
+
+		try:
+			func = switcher.get(i_choice, lambda: "Invalid Choice!!")
+			func()
+		except Exception as e:
+			print ("Some issue happened!\n")
+			print (e)
+			continue
+
+if __name__ == '__main__':
+  main()
