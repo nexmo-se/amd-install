@@ -2,35 +2,38 @@
 import subprocess
 import logging
 import boto3
+import botocore
 import json
 import requests
 import os.path
 from os import path
 import sys
 import time
+import docker
+import base64
 from botocore.exceptions import ClientError
 
 AWS_KEY=""
 AWS_SECRET=""
 S3_BUCKET_NAME= ""
 DB_TABLE=""
-LOG_GROUP_NAME=""
-INSTANCE_NAME=""
-
-REGION="us-east-1"
+REGION=""
 
 #this do not need to changed
+ECS_CLUSTER = 'amd-cluster'
+ECS_SERVICE = 'amd-service'
+DOCKER_FILE_PATH  = '../beep-detection-server'
+LOCAL_REPOSITORY = 'amd'
 ENV="prod"
-PORT="80:8080"
-DOCKER_FILE="tbass134/amd"
 MODEL="https://vonage-amd.s3.amazonaws.com/models/export.pkl"
 
 import os
 os.environ["AWS_ACCESS_KEY_ID"] = AWS_KEY
 os.environ["AWS_SECRET_ACCESS_KEY"] = AWS_SECRET
 
+
 def process_command(cmd):
-	output = subprocess.run(cmd)
+	output = subprocess.run(cmd, shell=True)
 	print("output {}".format(output))
 
 def create_bucket(bucket_name, region=None):
@@ -76,7 +79,7 @@ def download_model(url):
 		f.write(r.content)
 	print("model downloaded")
 
-def upload_model(file_name, bucket, object_name=None):
+def upload_file_to_s3(file_name, bucket, object_name=None):
 	"""Upload a file to an S3 bucket
 
 	:param file_name: File to upload
@@ -85,7 +88,7 @@ def upload_model(file_name, bucket, object_name=None):
 	:return: True if file was uploaded, else False
 	"""
 
-	print("uploading model {} to bucket {}".format(file_name,bucket))
+	print("uploading file {} to bucket {}".format(file_name,bucket))
 	# If S3 object_name was not specified, use file_name
 	if object_name is None:
 		object_name = file_name
@@ -98,8 +101,15 @@ def upload_model(file_name, bucket, object_name=None):
 		logging.error(e)
 		return False
 
-	print("model uploaded")
+	print(response)
+	print("file uploaded")
 	return True
+
+def get_s3_path(object_name, bucket):
+	s3_client = boto3.client('s3')
+	bucket_location = s3_client.get_bucket_location(Bucket=bucket)
+	url = "https://s3.{0}.amazonaws.com/{1}/{2}".format(bucket_location['LocationConstraint'], bucket, object_name)
+	return url
 
 def create_db(table_name,region):
 	print("Creating table {} in {}".format(table_name,region))
@@ -148,7 +158,6 @@ def update_table(table_name,region, bucket_name, model_path):
 	print("PutItem succeeded:")
 	print(json.dumps(response))
 
-
 def initialize_aws_settings():
 	"""
 	Creates a S3 bucket,
@@ -167,7 +176,7 @@ def initialize_aws_settings():
 
 	if path.exists("export.pkl"):
 		#upload model to newly created bucket
-		upload_model("export.pkl",S3_BUCKET_NAME,object_name="models/export.pkl")
+		upload_file_to_s3("export.pkl",S3_BUCKET_NAME,object_name="models/export.pkl")
 
 		#create and update dynamodb
 		create_db(DB_TABLE, REGION)
@@ -175,41 +184,183 @@ def initialize_aws_settings():
 	else:
 		print("Error: could not find downloaded model")
 
-def create_ec2_instance():
-	print("Creating EC2 instance..")
-	os.system("docker-machine create --driver amazonec2 --amazonec2-open-port 8000 --amazonec2-region {} {}".format(REGION, INSTANCE_NAME))
-	print("Connectting to instance...")
-	print("activate instance")
 
-	print("="*120)
+def create_ecr_repo(repositoryName):
+	client = boto3.client('ecr',region_name=REGION)
+	response = client.create_repository(
+	    repositoryName=repositoryName,
+	    imageTagMutability='MUTABLE'
+	)
+	print("create_ecr_repo {}".format(response))
 
-	print("Docker instance is running, however you will have to run the following commands manually")
-	print("1:	run `docker-machine env {}`".format(INSTANCE_NAME))
-	print("2:	then: `eval $(docker-machine env {})` ".format(INSTANCE_NAME))
-	print("3:	ssh into the instance with this command `docker-machine ssh {}`".format(INSTANCE_NAME))
-	print("You will then be connected into the instance")
-	print("The dockerfile is private, therefore you will need to login to docker. Please ask to be added to the docker file")
-	print("You will also need to setup CloudWatch logs before running the final command. Please see https://docs.google.com/document/d/1hi6fPdICSsSh1__L-9I1uXgdOfRSsTxwYp9GKH04bBQ/edit#heading=h.gc1u9cvgpw0a for more info")
+def login_ecr():
+	process_command("aws ecr get-login --no-include-email  --region {} | sh".format(REGION))
 
-	docker_command = "sudo docker run -d --log-driver=awslogs --log-opt awslogs-region={} --log-opt awslogs-group={} --log-opt awslogs-create-group=true -e AWS_KEY={} -e AWS_SECRET={} -e DB_TABLE={} -e DB_REGION={} -e ENV={} -p {} {}".format(REGION, LOG_GROUP_NAME, AWS_KEY, AWS_SECRET, DB_TABLE, REGION, ENV, PORT, DOCKER_FILE)
+def update_api_stack_yml():
+	YAML_API_PATH = "cloud_formation_stacks/api.yml"
+	image_arn = get_ecr_image()
 
-	print("4:	run this command `{}`".format(docker_command))
-	print("="*120)
-	sys.exit()
+	if image_arn is None:
+		return
+
+
+	if not os.path.exists(YAML_API_PATH):
+		print("ERROR: YAML file does not exist")
+		return False
+
+	with open(YAML_API_PATH) as f:
+		file = f.read()
+
+	text=file.replace('<INSTANCE_NAME>', LOCAL_REPOSITORY)
+	text=text.replace('<IMAGE>', image_arn)
+	text=text.replace('<AWS_KEY>', AWS_KEY)
+	text=text.replace('<AWS_SECRET>', AWS_SECRET)
+	text=text.replace('<REGION>', REGION)
+	text=text.replace('<DB_TABLE>', DB_TABLE)
+	text=text.replace('<ENV>', ENV)
+
+	with open(YAML_API_PATH, "w") as f:
+		f.write(text)
+
+	return True
+
+def deploy_cloud_formation_scripts(stack_path, stack_name, capabilities=None):
+
+	upload_file_to_s3(stack_path,S3_BUCKET_NAME,stack_path)
+	stack_url = get_s3_path(stack_path,S3_BUCKET_NAME)
+
+	client_cf = boto3.client('cloudformation', aws_access_key_id=AWS_KEY,
+	aws_secret_access_key=AWS_SECRET, region_name=REGION)
+
+	params = {
+	    'StackName': stack_name,
+	    'TemplateURL': stack_url,
+	}
+
+	if capabilities is not None:
+		params["Capabilities"] = capabilities
+
+	try:
+	    if stack_exists(stack_name, client_cf):
+	        print('Updating {}'.format(stack_name))
+	        stack_result = client_cf.update_stack(**params)
+	        waiter = client_cf.get_waiter('stack_update_complete')
+	    else:
+	        print('Creating {}'.format(stack_name))
+	        stack_result = client_cf.create_stack(**params)
+	        waiter = client_cf.get_waiter('stack_create_complete')
+	    print("...waiting for stack to be ready...")
+	    waiter.wait(StackName=stack_name)
+	except botocore.exceptions.ClientError as ex:
+	    error_message = ex.response['Error']['Message']
+	    if error_message == 'No updates are to be performed.':
+	        print("No changes")
+	    else:
+	        raise
+	else:
+	    print(client_cf.describe_stacks(StackName=stack_result['StackId']))
+
+def stack_exists(stack_name, client_cf):
+    stacks = client_cf.list_stacks()['StackSummaries']
+    for stack in stacks:
+        if stack['StackStatus'] == 'DELETE_COMPLETE':
+            continue
+        if stack_name == stack['StackName']:
+            return True
+    return False
+
+def deploy_cf_stacks():
+	deploy_cloud_formation_scripts('cloud_formation_stacks/vpc.yml', 'amd-vpc')
+	deploy_cloud_formation_scripts('cloud_formation_stacks/iam.yml', 'amd-iam', ['CAPABILITY_IAM'])
+	deploy_cloud_formation_scripts('cloud_formation_stacks/app-cluster.yml', 'amd-Cluster')
+	update_api_stack_yml()
+	deploy_cloud_formation_scripts('cloud_formation_stacks/api.yml', 'amd-api')
+
+
+def deploy_docker_image():
+	print("Login To AWS ECR")
+	login_ecr()
+
+	print("Creating Respoitiory on ECR...")
+	create_ecr_repo(LOCAL_REPOSITORY)
+
+	# build Docker image
+	docker_client = docker.from_env()
+	print("building docker file ...")
+
+	image = docker_client.images.get(LOCAL_REPOSITORY)
+
+	print("Login to ECR")
+	# get AWS ECR login token
+	ecr_client = boto3.client(
+		'ecr', aws_access_key_id=AWS_KEY,
+		aws_secret_access_key=AWS_SECRET, region_name=REGION)
+
+	ecr_credentials = (
+		ecr_client
+		.get_authorization_token()
+		['authorizationData'][0])
+
+	ecr_username = 'AWS'
+
+	ecr_password = (
+		base64.b64decode(ecr_credentials['authorizationToken'])
+		.replace(b'AWS:', b'')
+		.decode('utf-8'))
+
+	print("ecr_credentials {}".format(ecr_credentials))
+	ecr_url = ecr_credentials['proxyEndpoint']
+	print("ecr_url {}".format(ecr_url))
+
+	print("Login to Docker")
+	# get Docker to login/authenticate with ECR
+	docker_login = docker_client.login(
+		username=ecr_username, password=ecr_password, registry=ecr_url)
+	print("docker_login {}".format(docker_login))
+
+	print("Tagging image..")
+	# tag image for AWS ECR
+	ecr_repo_name = '{}/{}'.format(
+		ecr_url.replace('https://', ''), LOCAL_REPOSITORY)
+
+	image.tag(ecr_repo_name, tag='latest')
+
+	print("pushing image to AWS ECR")
+	# push image to AWS ECR
+	push_log = docker_client.images.push(ecr_repo_name, tag='latest')
+	print(push_log)
+
+def get_ecr_image():
+	ecr_client = boto3.client(
+		'ecr', aws_access_key_id=AWS_KEY,
+		aws_secret_access_key=AWS_SECRET, region_name=REGION)
+
+	response = ecr_client.describe_repositories(
+	    repositoryNames=[
+	        LOCAL_REPOSITORY,
+	    ]
+	)
+	try:
+		return response["repositories"][0]["repositoryArn"]
+	except:
+		print("Unable to fetch image")
+		return None
 
 def main():
 	print("="*120)
-	print("To get started, run the first command `initialize_aws_settings`. This will provision a S3 bucket as well as a DyanomDB Table. When this is completed, run `create_ec2_instance` to build the EC2 instance")
+	print("To get started, run the first command `initialize_aws_settings`. This will provision a S3 bucket as well as a DyanomDB Table. When this is completed, run `deploy_docker_image` to build the Docker Image (Note **) You will have to build the docker image manually. Finally run Deploy CloudFormation Stacks to deploy to your AWS instance")
 	print("="*120)
 
 	switcher = {
 		  1: initialize_aws_settings,
-		  2: create_ec2_instance
+		  2: deploy_docker_image,
+		  3: deploy_cf_stacks
 		  }
 	while(True):
 		s_choice = input('''
-		1: Initalize AWS Settings
-		2: Create EC2 Instance
+		1: Initialize AWS Settings
+		2: Deploy Docker Image
+		3: Deploy CloudFormation Stacks
 		Enter Choice:''')
 
 		i_choice = 0
