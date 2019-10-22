@@ -341,7 +341,8 @@ def get_ecr_image():
 	    ]
 	)
 	try:
-		return response["repositories"][0]["repositoryArn"]
+		print(response)
+		return response["repositories"][0]["repositoryUri"]
 	except:
 		print("Unable to fetch image")
 		return None
