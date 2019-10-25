@@ -22,15 +22,14 @@ REGION=""
 #this do not need to changed
 ECS_CLUSTER = 'amd-cluster'
 ECS_SERVICE = 'amd-service'
-DOCKER_FILE_PATH  = '../beep-detection-server'
 LOCAL_REPOSITORY = 'amd'
+
 ENV="prod"
 MODEL="https://vonage-amd.s3.amazonaws.com/models/export.pkl"
 
 import os
 os.environ["AWS_ACCESS_KEY_ID"] = AWS_KEY
 os.environ["AWS_SECRET_ACCESS_KEY"] = AWS_SECRET
-
 
 def process_command(cmd):
 	output = subprocess.run(cmd, shell=True)
@@ -68,10 +67,21 @@ def create_bucket(bucket_name, region=None):
 	return True
 
 def bucket_exists(bucket_name):
+	"""
+	Checks to verify existance of bucket
+	:param bucket_name: Bucket name to verify existance of
+
+	"""
+
 	s3 = boto3.resource('s3')
 	return s3.Bucket(bucket_name) in s3.buckets.all()
 
 def download_model(url):
+	"""
+	Downloads ML Model from Vonage owned S3 Bucket
+	:param url: Vonage s3 url
+	"""
+
 	print('downloading model...')
 	r = requests.get(url)
 
@@ -106,12 +116,22 @@ def upload_file_to_s3(file_name, bucket, object_name=None):
 	return True
 
 def get_s3_path(object_name, bucket):
+	"""
+	Returns the full URL of the requested object
+	:param object_name: the full path to the object on S3
+	:param bucket: name of S3 bucket
+	"""
 	s3_client = boto3.client('s3')
 	bucket_location = s3_client.get_bucket_location(Bucket=bucket)
 	url = "https://s3.{0}.amazonaws.com/{1}/{2}".format(bucket_location['LocationConstraint'], bucket, object_name)
 	return url
 
 def create_db(table_name,region):
+	"""
+	Creates dynamodb table
+	:param table_name: Name of Table
+	:param region: current region
+	"""
 	print("Creating table {} in {}".format(table_name,region))
 	dynamodb = boto3.resource('dynamodb', region_name=region)
 
@@ -141,6 +161,13 @@ def create_db(table_name,region):
 	print("Table status:", table.table_status)
 
 def update_table(table_name,region, bucket_name, model_path):
+	"""
+	Inserts pre-defined items into Table
+	:param table_name: Name of Table
+	:param region: current region
+	:param bucket_name: Name of S3 bucket
+	:param model_path: local path of ML Model (downloaded from Vonage S3)
+	"""
 	print("adding items to db in table {} in region {}".format(table_name, region))
 	dynamodb = boto3.resource('dynamodb', region_name=region)
 
@@ -186,6 +213,10 @@ def initialize_aws_settings():
 
 
 def create_ecr_repo(repositoryName):
+	"""
+	Creates ECR repo
+	:param repositoryName: Name of ECR repo
+	"""
 	client = boto3.client('ecr',region_name=REGION)
 	response = client.create_repository(
 	    repositoryName=repositoryName,
@@ -202,7 +233,6 @@ def update_api_stack_yml():
 
 	if image_arn is None:
 		return
-
 
 	if not os.path.exists(YAML_API_PATH):
 		print("ERROR: YAML file does not exist")
@@ -276,7 +306,6 @@ def deploy_cf_stacks():
 	update_api_stack_yml()
 	deploy_cloud_formation_scripts('cloud_formation_stacks/api.yml', 'amd-api')
 
-
 def deploy_docker_image():
 	print("Login To AWS ECR")
 	login_ecr()
@@ -348,9 +377,9 @@ def get_ecr_image():
 		return None
 
 def main():
-	print("="*120)
+	print("="*60)
 	print("To get started, run the first command `initialize_aws_settings`. This will provision a S3 bucket as well as a DyanomDB Table. When this is completed, run `deploy_docker_image` to build the Docker Image (Note **) You will have to build the docker image manually. Finally run Deploy CloudFormation Stacks to deploy to your AWS instance")
-	print("="*120)
+	print("="*60)
 
 	switcher = {
 		  1: initialize_aws_settings,
