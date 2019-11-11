@@ -22,8 +22,10 @@ Resources:
               Value: <AWS_SECRET>
             - Name: DB_REGION
               Value: <REGION>
-            - Name: DB_TABLE
-              Value: <DB_TABLE>
+            - Name: CONFIG_DB
+              Value: <CONFIG_DB>
+            - Name: METADATA_DB
+              Value: <METADATA_DB>
             - Name: ENV
               Value: <ENV>
           Cpu: 256
@@ -34,15 +36,15 @@ Resources:
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: 'amd'
+              awslogs-group: '<CONTAINER_NAME>'
               awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: 'amd'
+              awslogs-stream-prefix: '<CONTAINER_NAME>'
 
   Service:
     Type: AWS::ECS::Service
     DependsOn: ListenerRule
     Properties:
-      ServiceName: amd-service
+      ServiceName: <CONTAINER_NAME>-service
       TaskDefinition: !Ref Task
       Cluster: !ImportValue 'ECSCluster'
       LaunchType: FARGATE
@@ -59,14 +61,14 @@ Resources:
           SecurityGroups:
             - !ImportValue ContainerSecurityGroup
       LoadBalancers:
-        - ContainerName: amd
+        - ContainerName: <CONTAINER_NAME>
           ContainerPort: 8080
           TargetGroupArn: !Ref TargetGroup
 
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: amd-tg
+      Name: <CONTAINER_NAME>-tg
       VpcId: !ImportValue VPC
       Port: 80
       Protocol: HTTP
@@ -94,7 +96,7 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: AMD Endpoint
+    Description: Endpoint
     Value: !Join ['', ['http://', !ImportValue DomainName, '/']]
     Export:
-      Name: 'AMDEndpoint'
+      Name: 'Endpoint'

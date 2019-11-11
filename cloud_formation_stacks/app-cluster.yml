@@ -2,11 +2,11 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: container cluster on ECS, loadbalancer, security groups and cloudwatch
 
 Resources:
-  
+
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: 'amdCluster'
+      ClusterName: '<CONTAINER_NAME>Cluster'
 
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -43,16 +43,16 @@ Resources:
       Name: default
       VpcId: !ImportValue 'VPC'
       Protocol: 'HTTP'
-      Port: '80'  
+      Port: '80'
 
   CloudWatchLogsGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: 'amd'
+      LogGroupName: '<CONTAINER_NAME>'
       RetentionInDays: 1
 
   ContainerSecurityGroup:
-    Type: AWS::EC2::SecurityGroup      
+    Type: AWS::EC2::SecurityGroup
     Properties:
      VpcId: !ImportValue 'VPC'
      GroupDescription: for ecs containers
@@ -62,7 +62,7 @@ Resources:
 
 
 Outputs:
-  
+
   Cluster:
     Value: !Ref ECSCluster
     Export:
@@ -85,4 +85,3 @@ Outputs:
     Value: !GetAtt LoadBalancer.DNSName
     Export:
       Name: 'DomainName'
-

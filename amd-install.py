@@ -12,20 +12,25 @@ import time
 import docker
 import base64
 from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+load_dotenv()
 
-AWS_KEY=""
-AWS_SECRET=""
-S3_BUCKET_NAME= ""
-DB_TABLE=""
-REGION=""
+AWS_KEY=os.getenv("AWS_KEY")
+AWS_SECRET=os.getenv("AWS_SECRET")
+S3_BUCKET_NAME=os.getenv("S3_BUCKET_NAME")
+CONFIG_DB=os.getenv("CONFIG_DB")
+METADATA_DB=os.getenv("METADATA_DB", "")
+REGION=os.getenv("REGION")
 
 #this do not need to changed
-ECS_CLUSTER = 'amd-cluster'
-ECS_SERVICE = 'amd-service'
-LOCAL_REPOSITORY = 'amd'
+ECS_CLUSTER = os.getenv("ECS_CLUSTER")
+ECS_SERVICE = os.getenv("ECS_SERVICE")
+LOCAL_REPOSITORY = os.getenv("LOCAL_REPOSITORY")
+CONTAINER_NAME = os.getenv("CONTAINER_NAME")
 
-ENV="prod"
-MODEL="https://vonage-amd.s3.amazonaws.com/models/export.pkl"
+ENV=os.getenv("ENV","prod")
+MODEL=os.getenv("MODEL")
+EXPECTED_PREDICTION = os.getenv("EXPECTED_PREDICTION", [0,1])
 
 import os
 os.environ["AWS_ACCESS_KEY_ID"] = AWS_KEY
@@ -84,8 +89,11 @@ def download_model(url):
 
 	print('downloading model...')
 	r = requests.get(url)
+	if not os.path.exists("models"):
+		os.makedirs("models")
 
-	with open('export.pkl', 'wb') as f:
+	filename = url[url.rfind("/")+1:]
+	with open('models/'+filename, 'wb') as f:
 		f.write(r.content)
 	print("model downloaded")
 
@@ -160,7 +168,7 @@ def create_db(table_name,region):
 	table.wait_until_exists()
 	print("Table status:", table.table_status)
 
-def update_table(table_name,region, bucket_name, model_path):
+def update_table(table_name,region, bucket_name, expected_prediction, model_path):
 	"""
 	Inserts pre-defined items into Table
 	:param table_name: Name of Table
@@ -177,7 +185,7 @@ def update_table(table_name,region, bucket_name, model_path):
 			'env': "prod",
 			'bucket': bucket_name,
 			'debug':True,
-			'expected_prediction':[0,1],
+			'expected_prediction':expected_prediction,
 			"model_path":model_path
 		}
 	)
@@ -199,15 +207,17 @@ def initialize_aws_settings():
 		print("bucket not created")
 		sys.exit()
 	#download ML model from different S3 bucket
-	download_model(MODEL)
 
-	if path.exists("export.pkl"):
+	download_model(MODEL)
+	filename = MODEL[MODEL.rfind("/")+1:]
+
+	if path.exists("models/"+filename):
 		#upload model to newly created bucket
-		upload_file_to_s3("export.pkl",S3_BUCKET_NAME,object_name="models/export.pkl")
+		upload_file_to_s3("models/"+filename,S3_BUCKET_NAME,object_name="models/"+filename)
 
 		#create and update dynamodb
-		create_db(DB_TABLE, REGION)
-		update_table(DB_TABLE, REGION, S3_BUCKET_NAME, model_path="models/export.pkl")
+		create_db(CONFIG_DB, REGION)
+		update_table(CONFIG_DB, REGION, S3_BUCKET_NAME, expected_prediction=[0,1], model_path="models/"+filename)
 	else:
 		print("Error: could not find downloaded model")
 
@@ -219,8 +229,8 @@ def create_ecr_repo(repositoryName):
 	"""
 	client = boto3.client('ecr',region_name=REGION)
 	response = client.create_repository(
-	    repositoryName=repositoryName,
-	    imageTagMutability='MUTABLE'
+		repositoryName=repositoryName,
+		imageTagMutability='MUTABLE'
 	)
 	print("create_ecr_repo {}".format(response))
 
@@ -246,10 +256,26 @@ def update_api_stack_yml():
 	text=text.replace('<AWS_KEY>', AWS_KEY)
 	text=text.replace('<AWS_SECRET>', AWS_SECRET)
 	text=text.replace('<REGION>', REGION)
-	text=text.replace('<DB_TABLE>', DB_TABLE)
+	text=text.replace('<CONFIG_DB>', CONFIG_DB)
+	text=text.replace('<METADATA_DB>', METADATA_DB)
+
 	text=text.replace('<ENV>', ENV)
+	text = text.replace("<CONTAINER_NAME>",CONTAINER_NAME)
 
 	with open(YAML_API_PATH, "w") as f:
+		f.write(text)
+
+	return True
+
+def update_cluster_stack_yml():
+	YAML_APP_CLUSTER_PATH = "cloud_formation_stacks/app-cluster.yml"
+
+	with open(YAML_APP_CLUSTER_PATH) as f:
+		file = f.read()
+
+	text = file.replace("<CONTAINER_NAME>",CONTAINER_NAME)
+
+	with open(YAML_APP_CLUSTER_PATH, "w") as f:
 		f.write(text)
 
 	return True
@@ -263,48 +289,49 @@ def deploy_cloud_formation_scripts(stack_path, stack_name, capabilities=None):
 	aws_secret_access_key=AWS_SECRET, region_name=REGION)
 
 	params = {
-	    'StackName': stack_name,
-	    'TemplateURL': stack_url,
+		'StackName': stack_name,
+		'TemplateURL': stack_url,
 	}
 
 	if capabilities is not None:
 		params["Capabilities"] = capabilities
 
 	try:
-	    if stack_exists(stack_name, client_cf):
-	        print('Updating {}'.format(stack_name))
-	        stack_result = client_cf.update_stack(**params)
-	        waiter = client_cf.get_waiter('stack_update_complete')
-	    else:
-	        print('Creating {}'.format(stack_name))
-	        stack_result = client_cf.create_stack(**params)
-	        waiter = client_cf.get_waiter('stack_create_complete')
-	    print("...waiting for stack to be ready...")
-	    waiter.wait(StackName=stack_name)
+		if stack_exists(stack_name, client_cf):
+			print('Updating {}'.format(stack_name))
+			stack_result = client_cf.update_stack(**params)
+			waiter = client_cf.get_waiter('stack_update_complete')
+		else:
+			print('Creating {}'.format(stack_name))
+			stack_result = client_cf.create_stack(**params)
+			waiter = client_cf.get_waiter('stack_create_complete')
+		print("...waiting for stack to be ready...")
+		waiter.wait(StackName=stack_name)
 	except botocore.exceptions.ClientError as ex:
-	    error_message = ex.response['Error']['Message']
-	    if error_message == 'No updates are to be performed.':
-	        print("No changes")
-	    else:
-	        raise
+		error_message = ex.response['Error']['Message']
+		if error_message == 'No updates are to be performed.':
+			print("No changes")
+		else:
+			raise
 	else:
-	    print(client_cf.describe_stacks(StackName=stack_result['StackId']))
+		print(client_cf.describe_stacks(StackName=stack_result['StackId']))
 
 def stack_exists(stack_name, client_cf):
-    stacks = client_cf.list_stacks()['StackSummaries']
-    for stack in stacks:
-        if stack['StackStatus'] == 'DELETE_COMPLETE':
-            continue
-        if stack_name == stack['StackName']:
-            return True
-    return False
+	stacks = client_cf.list_stacks()['StackSummaries']
+	for stack in stacks:
+		if stack['StackStatus'] == 'DELETE_COMPLETE':
+			continue
+		if stack_name == stack['StackName']:
+			return True
+	return False
 
 def deploy_cf_stacks():
-	deploy_cloud_formation_scripts('cloud_formation_stacks/vpc.yml', 'amd-vpc')
-	deploy_cloud_formation_scripts('cloud_formation_stacks/iam.yml', 'amd-iam', ['CAPABILITY_IAM'])
-	deploy_cloud_formation_scripts('cloud_formation_stacks/app-cluster.yml', 'amd-Cluster')
+	# deploy_cloud_formation_scripts('cloud_formation_stacks/vpc.yml', CONTAINER_NAME+'-vpc')
+	# deploy_cloud_formation_scripts('cloud_formation_stacks/iam.yml', CONTAINER_NAME+'-iam', ['CAPABILITY_IAM'])
+	# update_cluster_stack_yml()
+	# deploy_cloud_formation_scripts('cloud_formation_stacks/app-cluster.yml', CONTAINER_NAME+'-Cluster')
 	update_api_stack_yml()
-	deploy_cloud_formation_scripts('cloud_formation_stacks/api.yml', 'amd-api')
+	deploy_cloud_formation_scripts('cloud_formation_stacks/api.yml', CONTAINER_NAME+'-api')
 
 def deploy_docker_image():
 	print("Login To AWS ECR")
@@ -365,9 +392,9 @@ def get_ecr_image():
 		aws_secret_access_key=AWS_SECRET, region_name=REGION)
 
 	response = ecr_client.describe_repositories(
-	    repositoryNames=[
-	        LOCAL_REPOSITORY,
-	    ]
+		repositoryNames=[
+			LOCAL_REPOSITORY,
+		]
 	)
 	try:
 		print(response)
