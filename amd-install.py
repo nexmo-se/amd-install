@@ -23,11 +23,8 @@ METADATA_DB=os.getenv("METADATA_DB", "")
 REGION=os.getenv("REGION")
 
 #this do not need to changed
-ECS_CLUSTER = os.getenv("ECS_CLUSTER")
-ECS_SERVICE = os.getenv("ECS_SERVICE")
-LOCAL_REPOSITORY = os.getenv("LOCAL_REPOSITORY")
-CONTAINER_NAME = os.getenv("CONTAINER_NAME")
 
+CONTAINER_NAME = os.getenv("CONTAINER_NAME")
 ENV=os.getenv("ENV","prod")
 MODEL=os.getenv("MODEL")
 EXPECTED_PREDICTION = os.getenv("EXPECTED_PREDICTION", [0,1])
@@ -251,7 +248,7 @@ def update_api_stack_yml():
 	with open(YAML_API_PATH) as f:
 		file = f.read()
 
-	text=file.replace('<INSTANCE_NAME>', LOCAL_REPOSITORY)
+	text=file.replace('<INSTANCE_NAME>', CONTAINER_NAME)
 	text=text.replace('<IMAGE>', image_arn)
 	text=text.replace('<AWS_KEY>', AWS_KEY)
 	text=text.replace('<AWS_SECRET>', AWS_SECRET)
@@ -338,13 +335,13 @@ def deploy_docker_image():
 	login_ecr()
 
 	print("Creating Respoitiory on ECR...")
-	create_ecr_repo(LOCAL_REPOSITORY)
+	create_ecr_repo(CONTAINER_NAME)
 
 	# build Docker image
 	docker_client = docker.from_env()
 	print("building docker file ...")
 
-	image = docker_client.images.get(LOCAL_REPOSITORY)
+	image = docker_client.images.get(CONTAINER_NAME)
 
 	print("Login to ECR")
 	# get AWS ECR login token
@@ -377,7 +374,7 @@ def deploy_docker_image():
 	print("Tagging image..")
 	# tag image for AWS ECR
 	ecr_repo_name = '{}/{}'.format(
-		ecr_url.replace('https://', ''), LOCAL_REPOSITORY)
+		ecr_url.replace('https://', ''), CONTAINER_NAME)
 
 	image.tag(ecr_repo_name, tag='latest')
 
@@ -393,7 +390,7 @@ def get_ecr_image():
 
 	response = ecr_client.describe_repositories(
 		repositoryNames=[
-			LOCAL_REPOSITORY,
+			CONTAINER_NAME,
 		]
 	)
 	try:

@@ -5,9 +5,6 @@ S3_BUCKET_NAME= ""
 CONFIG_DB=""
 
 METADATA_DB="NA"
-ECS_CLUSTER = 'amd-cluster'
-ECS_SERVICE = 'amd-service'
-LOCAL_REPOSITORY = 'amd'
 CONTAINER_NAME = 'amd'
 ENV="prod"
 MODEL=""
