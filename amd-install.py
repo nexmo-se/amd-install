@@ -326,10 +326,10 @@ def stack_exists(stack_name, client_cf):
 	return False
 
 def deploy_cf_stacks():
-	# deploy_cloud_formation_scripts('cloud_formation_stacks/vpc.yml', CONTAINER_NAME+'-vpc')
-	# deploy_cloud_formation_scripts('cloud_formation_stacks/iam.yml', CONTAINER_NAME+'-iam', ['CAPABILITY_IAM'])
-	# update_cluster_stack_yml()
-	# deploy_cloud_formation_scripts('cloud_formation_stacks/app-cluster.yml', CONTAINER_NAME+'-Cluster')
+	deploy_cloud_formation_scripts('cloud_formation_stacks/vpc.yml', CONTAINER_NAME+'-vpc')
+	deploy_cloud_formation_scripts('cloud_formation_stacks/iam.yml', CONTAINER_NAME+'-iam', ['CAPABILITY_IAM'])
+	update_cluster_stack_yml()
+	deploy_cloud_formation_scripts('cloud_formation_stacks/app-cluster.yml', CONTAINER_NAME+'-Cluster')
 	update_api_stack_yml()
 	deploy_cloud_formation_scripts('cloud_formation_stacks/api.yml', CONTAINER_NAME+'-api')
 
