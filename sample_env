@@ -7,4 +7,4 @@ CONFIG_DB=""
 METADATA_DB="NA"
 CONTAINER_NAME = 'amd'
 ENV="prod"
-MODEL=""
+MODEL="https://vonage-models.s3.amazonaws.com/amd.pkl"
